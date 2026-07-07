@@ -17,7 +17,8 @@ class AudioFile:
 
 @dataclass
 class DuplicateGroup:
-    tier: Literal["tags", "fingerprint", "name"]
+    tier: Literal["fingerprint"]
     confidence: Literal["high", "medium"]
     files: list[AudioFile] = field(default_factory=list)
-    score: float = 1.0
+    score: float = 1.0       # acoustic fingerprint similarity — this is what clustered the group
+    tag_score: float = 0.0   # corroborating tag/filename similarity; informational only

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audio-dedup"
+version = "0.1.0"
+description = "Find duplicate audio files by acoustic fingerprint"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mutagen>=1.47",
+    "rapidfuzz>=3.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+fingerprint = ["chromaprint", "audioread"]
+
+[project.scripts]
+audio-dedup = "audio_dedup.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -46,21 +46,20 @@ def print_report(
     for w in warnings:
         _console.print(f"\n[yellow][!] {w}[/yellow]")
 
-    tier_specs = [
-        ("tags", "HIGH CONFIDENCE — Tag Match"),
-        ("fingerprint", "HIGH CONFIDENCE — Fingerprint Match"),
-        ("name", "POSSIBLE DUPLICATE — Filename Similarity"),
-    ]
-
     total_savings = 0
 
-    for tier_id, tier_label in tier_specs:
-        tier_groups = [g for g in groups if g.tier == tier_id]
+    confidence_specs = [
+        ("high", "HIGH CONFIDENCE — Fingerprint Verified"),
+        ("medium", "MEDIUM CONFIDENCE — Fingerprint Verified, Duration Differs"),
+    ]
+
+    for confidence, label_text in confidence_specs:
+        tier_groups = [g for g in groups if g.confidence == confidence]
         if not tier_groups:
             continue
 
         _console.print()
-        _console.print(Rule(f"[bold]{tier_label}[/bold]  ({len(tier_groups)} groups)"))
+        _console.print(Rule(f"[bold]{label_text}[/bold]  ({len(tier_groups)} groups)"))
 
         for i, group in enumerate(tier_groups, 1):
             title = group.files[0].tags.get("title") or ""
@@ -69,9 +68,14 @@ def print_report(
             if artist:
                 label += f" – {artist}"
             dur = _fmt_duration(group.files[0].duration)
-            score_str = f"  [dim](score: {group.score:.0%})[/dim]" if tier_id != "tags" else ""
+            score_str = f"  [dim](score: {group.score:.0%})[/dim]"
+            tag_note = (
+                "tags/filenames agree"
+                if group.tag_score >= 0.5
+                else "fingerprint only — tags/filenames differ"
+            )
 
-            _console.print(f"\n  Group {i}  {label}  [{dur}]{score_str}")
+            _console.print(f"\n  Group {i}  {label}  [{dur}]{score_str}  [dim]({tag_note})[/dim]")
 
             best = _best_file(group)
             sorted_files = sorted(group.files, key=lambda f: f.size, reverse=True)
@@ -94,6 +98,7 @@ def print_json(groups: list[DuplicateGroup]) -> None:
             "tier": g.tier,
             "confidence": g.confidence,
             "score": round(g.score, 4),
+            "tag_score": round(g.tag_score, 4),
             "files": [str(f.path) for f in g.files],
         }
         for g in groups

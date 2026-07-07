@@ -1,1 +1,6 @@
-**/__pycache__/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.audio_dedup_cache.sqlite3*
