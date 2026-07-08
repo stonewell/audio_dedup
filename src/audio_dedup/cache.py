@@ -161,14 +161,34 @@ class FingerprintCache:
             return []
         cur = self._conn.cursor()
         cur.execute("CREATE TEMP TABLE IF NOT EXISTS query_terms (term INTEGER PRIMARY KEY)")
-        cur.execute("DELETE FROM query_terms")
-        cur.executemany("INSERT INTO query_terms (term) VALUES (?)", [(t,) for t in term_keys])
+        # Without an explicit transaction, autocommit mode (isolation_level=None)
+        # commits after every individual statement — this call runs once per
+        # file, so leaving these thousands of inserts unbatched turned a scan
+        # of a real library into tens of millions of individually committed
+        # inserts (a well-known SQLite trap: unbatched inserts are commonly
+        # 100-1000x slower than the same inserts in one transaction).
+        cur.execute("BEGIN")
+        try:
+            cur.execute("DELETE FROM query_terms")
+            cur.executemany("INSERT INTO query_terms (term) VALUES (?)", [(t,) for t in term_keys])
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
+        # CROSS JOIN (not INNER JOIN) is deliberate: it's SQLite's documented way
+        # to pin join order and stop the query planner from reordering it. Without
+        # it, SQLite chose to fully SCAN `terms` (growing with the whole library)
+        # for every single file instead of driving from the small `query_terms`
+        # set and SEARCHing `terms` by its indexed term column — silently turning
+        # this from an O(this file's terms) lookup into an O(library size) one,
+        # defeating the entire point of the inverted index (confirmed via
+        # EXPLAIN QUERY PLAN: SCAN vs SEARCH USING PRIMARY KEY).
         return cur.execute(
             """
             SELECT fl.path, COUNT(*) AS shared, fl.term_count
             FROM query_terms q
+            CROSS JOIN terms t ON t.term = q.term
             JOIN term_stats s ON s.term = q.term
-            JOIN terms t ON t.term = q.term
             JOIN files fl ON fl.id = t.file_id
             WHERE s.df <= ? AND fl.path > ?
             GROUP BY t.file_id

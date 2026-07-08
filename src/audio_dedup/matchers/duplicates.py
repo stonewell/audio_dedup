@@ -60,9 +60,14 @@ def find_duplicates(
     edge_tag_score: dict[frozenset[Path], float] = {}
     edge_duration_delta: dict[frozenset[Path], float] = {}
 
-    for a in files:
-        if not a.fingerprint:
-            continue
+    eligible = [f for f in files if f.fingerprint]
+    total = len(eligible)
+    matches_found = 0
+
+    if verbose and total > 0:
+        print(f"  Matching {total} files against the fingerprint index...", flush=True)
+
+    for i, a in enumerate(eligible, 1):
         a_terms = extract_terms(a.fingerprint)
         candidates = cache.find_candidates(str(a.path), a_terms, MIN_SHARED_TERMS, TERM_DF_CAP)
         for cand_path_str, shared, cand_term_count in candidates:
@@ -78,6 +83,12 @@ def find_duplicates(
                 edge_score[key] = sim
                 edge_tag_score[key] = identity_score(a, b) / 100.0
                 edge_duration_delta[key] = abs(a.duration - b.duration)
+                matches_found += 1
+        if verbose:
+            print(f"  [{i}/{total}] {matches_found} matches\r", end="", flush=True)
+
+    if verbose and total > 0:
+        print(f"  Done: {matches_found} matches" + " " * 20)
 
     buckets: dict[Path, list[AudioFile]] = {}
     for f in files:

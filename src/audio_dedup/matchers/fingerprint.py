@@ -63,6 +63,19 @@ def _try_chromaprint_library(path: Path) -> tuple[float, list[int]] | None:
         return None
 
 
+def _to_signed32(x: int) -> int:
+    """Normalize a 32-bit value to Python's signed two's-complement range.
+
+    fpcalc's -json output emits some sub-fingerprints as unsigned literals
+    (up to 2**32-1), which struct.pack('i', ...) rejects outright. The
+    chromaprint library path already returns signed ints, so normalizing
+    here makes every fingerprint element consistently representable as a
+    32-bit two's-complement value regardless of which backend produced it.
+    """
+    x &= 0xFFFFFFFF
+    return x - 0x100000000 if x >= 0x80000000 else x
+
+
 def _try_fpcalc(path: Path) -> tuple[float, list[int]] | None:
     """Fingerprint by calling the fpcalc binary with -raw -json.
 
@@ -82,7 +95,8 @@ def _try_fpcalc(path: Path) -> tuple[float, list[int]] | None:
         if result.returncode != 0:
             return None
         data = json.loads(result.stdout)
-        return float(data.get("duration") or 0), data.get("fingerprint") or []
+        fingerprint = [_to_signed32(x) for x in (data.get("fingerprint") or [])]
+        return float(data.get("duration") or 0), fingerprint
     except Exception:
         return None
 
@@ -97,7 +111,13 @@ def _similarity_at_offset(a: list[int], b: list[int], offset: int) -> float:
     length = min(len(a2), len(b2))
     if length == 0:
         return 0.0
-    diff = sum((a2[i] ^ b2[i]).bit_count() for i in range(length))
+    # Mask to 32 bits before popcount: Python ints are arbitrary-precision,
+    # so XOR-ing a negative and a non-negative value does NOT yield the
+    # 32-bit two's-complement XOR pattern .bit_count() needs — it silently
+    # produces a nonsense result (e.g. (-5 ^ 3).bit_count() == 1 instead of
+    # the correct 29), badly under-counting differing bits about half the
+    # time in practice, since sign is essentially a coin flip per frame.
+    diff = sum(((a2[i] ^ b2[i]) & 0xFFFFFFFF).bit_count() for i in range(length))
     return 1.0 - diff / (length * 32)
 
 

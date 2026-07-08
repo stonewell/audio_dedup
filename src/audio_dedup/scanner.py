@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import itertools
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import mutagen
@@ -56,16 +57,20 @@ def _read_file(path: Path, min_size: int) -> AudioFile | None:
 def scan(directory: Path, min_size: int = 0, max_workers: int | None = None) -> list[AudioFile]:
     """Walk `directory` and read tags for every audio file.
 
-    Tag reads are I/O-bound (open + parse a header), so they're farmed out
-    to a thread pool — for a large collection this is the difference between
-    a scan that takes minutes and one that takes seconds.
+    Parsing a tag header (struct unpacking, ID3/FLAC frame decoding, string
+    handling in mutagen) is mostly pure-Python CPU work, not I/O wait, so a
+    thread pool mostly serializes on the GIL instead of actually
+    parallelizing it — a thread pool was tried here first and didn't scale.
+    A process pool (same pattern as matchers/fingerprint.py's fingerprinting
+    step) gives each worker its own interpreter/GIL, which is what actually
+    makes a large collection scan faster with more cores.
     """
     paths = [p for p in directory.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS]
-    workers = max_workers or min(32, (os.cpu_count() or 4) * 4)
+    workers = max_workers or (os.cpu_count() or 4)
 
     files: list[AudioFile] = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for result in pool.map(lambda p: _read_file(p, min_size), paths):
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for result in pool.map(_read_file, paths, itertools.repeat(min_size)):
             if result is not None:
                 files.append(result)
     return files

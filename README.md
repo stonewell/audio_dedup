@@ -44,8 +44,9 @@ Comparing every file against every other file is O(n²) and doesn't scale past
 a few thousand files. Instead:
 
 1. **Scan** (`scanner.py`) reads tags for every file in parallel
-   (`ThreadPoolExecutor`) — I/O-bound, so this is nearly free even for a huge
-   library.
+   (`ProcessPoolExecutor`) — tag parsing spends real time in pure-Python code
+   (struct unpacking, frame decoding), so a thread pool mostly serializes on
+   the GIL instead of scaling with cores; a process pool actually does.
 2. **Fingerprint** (`matchers/fingerprint.py`) computes an acoustic fingerprint
    for every file, in parallel (`ProcessPoolExecutor`, sized to CPU count).
    Fingerprints are cached by `(path, mtime)` in a SQLite database
@@ -111,11 +112,13 @@ a few thousand files. Instead:
   perfect partial match. Containment against the smaller file's own term
   count asks the right question: how much of the smaller file's content is
   present in the other one.
-- **Process pool over thread pool for fingerprinting**: fingerprinting spends
-  real time in Python-level decode loops (not just native/subprocess calls
-  that release the GIL), so a thread pool wouldn't get full parallelism
-  across cores. A process pool does, at the cost of small per-task overhead
-  that's negligible next to actual decode time.
+- **Process pool over thread pool for fingerprinting and scanning**: both
+  spend real time in Python-level work (decode loops; struct/frame parsing)
+  rather than blocking on I/O the GIL would release, so a thread pool
+  wouldn't get full parallelism across cores — confirmed by an earlier
+  version of the scanner using a thread pool and not scaling with core
+  count. A process pool does, at the cost of small per-task overhead that's
+  negligible next to actual decode/parse time.
 - **No skip-fingerprint flag**: since fingerprinting is the only signal that
   determines a duplicate, an option to skip it would just make the tool find
   nothing. Earlier iterations of this tool had `--no-fingerprint` /
