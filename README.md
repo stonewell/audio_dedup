@@ -128,7 +128,7 @@ One fingerprinting backend is required (library preferred, falls back to
 binary automatically):
 
 ```
-pip install "tools/audio_dedup[fingerprint]"   # library path (chromaprint + audioread)
+pip install "audio_dedup[fingerprint]"   # library path (chromaprint + audioread)
 # or: install fpcalc from https://acoustid.org/chromaprint and put it on PATH
 ```
 
