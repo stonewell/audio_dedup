@@ -6,8 +6,8 @@ metadata.
 ## Install
 
 ```
-pip install tools/audio_dedup                 # or: pip install -e tools/audio_dedup for development
-pip install "tools/audio_dedup[fingerprint]"   # adds the library-based fingerprinting backend
+pip install audio_dedup                 # or: pip install -e tools/audio_dedup for development
+pip install "audio_dedup[fingerprint]"   # adds the library-based fingerprinting backend
 ```
 
 ## Usage
