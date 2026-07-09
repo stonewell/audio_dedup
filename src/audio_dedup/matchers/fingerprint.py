@@ -178,7 +178,8 @@ def ensure_fingerprints(
             continue
         try:
             mtime = f.path.stat().st_mtime
-        except OSError:
+        except OSError as e:
+            warnings.append(f"Skipped fingerprinting {f.path} — file became inaccessible: {e}")
             continue
         cached = cache.get(str(f.path), mtime)
         if cached is None:
@@ -191,6 +192,7 @@ def ensure_fingerprints(
         cached_count += 1
 
     new_count = 0
+    failed: list[AudioFile] = []
     workers = max_workers or (os.cpu_count() or 4)
 
     if to_compute:
@@ -217,6 +219,8 @@ def ensure_fingerprints(
                             mtime = 0.0
                         cache.set(str(f.path), mtime, f.duration, fp_data)
                         new_count += 1
+                    else:
+                        failed.append(f)
                     if verbose:
                         print(f"  [{i}/{len(to_compute)}] {new_count} computed\r", end="", flush=True)
             except KeyboardInterrupt:
@@ -228,7 +232,16 @@ def ensure_fingerprints(
     if verbose:
         print(f"  Done: {new_count} computed, {cached_count} from cache" + " " * 20)
 
-    if total > 0 and not any(f.fingerprint for f in files):
+    if to_compute and new_count == 0:
+        # Every file we actually attempted failed — almost certainly a missing
+        # backend, not N individually broken files, so show the one actionable
+        # warning instead of spamming a near-identical "skipped" line per file.
+        # Scoped to `to_compute` (not all `files`) so files skipped earlier for
+        # unrelated reasons (e.g. became inaccessible, see above) don't also
+        # trigger this — they were never attempted at all.
         warnings.append(NO_BACKEND_WARNING)
+    else:
+        for f in failed:
+            warnings.append(f"Skipped fingerprinting {f.path} — unsupported or corrupt audio data")
 
     return warnings, new_count
