@@ -6,7 +6,7 @@ metadata.
 ## Install
 
 ```
-pip install audio_dedup                 # or: pip install -e tools/audio_dedup for development
+pip install audio_dedup                 # or: pip install -e audio_dedup for development
 pip install "audio_dedup[fingerprint]"   # adds the library-based fingerprinting backend
 ```
 
@@ -66,15 +66,20 @@ a few thousand files. Instead:
    Overly common terms (e.g. a near-silent intro shared by unrelated songs)
    are excluded above a document-frequency cap so one ubiquitous value can't
    flood every file's candidate list.
-4. **Verify** (`matchers/fingerprint.py: fingerprint_similarity`) computes
-   Hamming similarity between candidate pairs' fingerprints, searching a
+4. **Match & verify** (`matchers/duplicates.py`) runs the index lookup and
+   verification for every file in parallel (`ProcessPoolExecutor`) — each
+   worker opens its own connection to the cache (SQLite's WAL mode supports
+   concurrent readers) and, for its assigned file, queries the index and
+   computes Hamming similarity (`matchers/fingerprint.py:
+   fingerprint_similarity`) against every candidate returned, searching a
    small range of frame offsets (±20 frames, ~2.5s) before giving up. A naive
    index-aligned comparison misses matches where one file has extra lead-in
    silence or a slightly different trim — a fraction-of-a-second shift is
    enough to desync a frame-by-frame comparison otherwise. This step alone
-   decides accept/reject; the index above only decides what's worth checking.
-5. **Cluster** (`matchers/duplicates.py`) unions confirmed pairs (≥0.85
-   similarity) via union-find into duplicate groups, and separately computes
+   decides accept/reject; the index only decides what's worth checking.
+5. **Cluster** (`matchers/duplicates.py`, back in the main process) unions
+   confirmed pairs (≥0.85 similarity) via union-find into duplicate groups,
+   and separately computes
    two non-gating annotations for the report only: a corroborating
    tag/filename fuzzy score (`matchers/identity.py`), and a confidence level
    (`"medium"` instead of `"high"` if a confirmed pair's durations differ by
@@ -112,13 +117,25 @@ a few thousand files. Instead:
   perfect partial match. Containment against the smaller file's own term
   count asks the right question: how much of the smaller file's content is
   present in the other one.
-- **Process pool over thread pool for fingerprinting and scanning**: both
-  spend real time in Python-level work (decode loops; struct/frame parsing)
-  rather than blocking on I/O the GIL would release, so a thread pool
-  wouldn't get full parallelism across cores — confirmed by an earlier
-  version of the scanner using a thread pool and not scaling with core
-  count. A process pool does, at the cost of small per-task overhead that's
-  negligible next to actual decode/parse time.
+- **Process pool over thread pool for fingerprinting, scanning, and
+  matching**: all three spend real time in Python-level work (decode loops;
+  struct/frame parsing; Hamming-distance offset search) rather than blocking
+  on I/O the GIL would release, so a thread pool wouldn't get full
+  parallelism across cores — confirmed by an earlier version of the scanner
+  using a thread pool and not scaling with core count. A process pool does,
+  at the cost of small per-task overhead that's negligible next to actual
+  decode/parse/match time. Each matching worker opens its own cache
+  connection once (not once per file) and reuses it across every file it's
+  assigned, since WAL mode supports concurrent readers safely but connection
+  setup itself isn't free.
+- **Workers read the cache back for candidate fingerprints, rather than the
+  main process handing every fingerprint to every worker up front**: the
+  main process already holds every file's fingerprint in memory, but passing
+  the whole set to each worker via the pool initializer would multiply the
+  library's memory footprint by the worker count. Since a worker only ever
+  needs the (typically few) candidates its own file's index lookup returns,
+  fetching those on demand from the shared SQLite cache keeps memory flat
+  regardless of worker count.
 - **No skip-fingerprint flag**: since fingerprinting is the only signal that
   determines a duplicate, an option to skip it would just make the tool find
   nothing. Earlier iterations of this tool had `--no-fingerprint` /

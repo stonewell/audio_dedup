@@ -18,11 +18,13 @@ class FingerprintCache:
     """
 
     def __init__(self, cache_path: Path) -> None:
+        self.path = cache_path
         self._conn = sqlite3.connect(cache_path, check_same_thread=False)
         self._conn.isolation_level = None  # manual transaction control via explicit BEGIN/COMMIT
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA temp_store=MEMORY")
+        self._conn.execute("PRAGMA busy_timeout=5000")  # tolerate brief contention from parallel readers
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS fingerprints ("
             "path TEXT PRIMARY KEY, mtime REAL NOT NULL, "
@@ -57,6 +59,23 @@ class FingerprintCache:
         count = len(blob) // 4
         fingerprint = list(struct.unpack(f"<{count}i", blob))
         return duration, fingerprint
+
+    def get_fingerprint(self, file_path: str) -> list[int] | None:
+        """Fetch a fingerprint by path with no mtime/staleness check.
+
+        For reading back a candidate's fingerprint within the same run that
+        already confirmed it's current (see matchers/duplicates.py's parallel
+        matching step) — unlike get(), which is for deciding whether a file
+        needs re-fingerprinting at all.
+        """
+        row = self._conn.execute(
+            "SELECT fingerprint FROM fingerprints WHERE path = ?", (file_path,)
+        ).fetchone()
+        if row is None:
+            return None
+        blob = row[0]
+        count = len(blob) // 4
+        return list(struct.unpack(f"<{count}i", blob))
 
     def set(self, file_path: str, mtime: float, duration: float, fingerprint: list[int]) -> None:
         blob = struct.pack(f"<{len(fingerprint)}i", *fingerprint)

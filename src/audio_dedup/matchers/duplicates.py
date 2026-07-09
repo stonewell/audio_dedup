@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from ..cache import FingerprintCache
@@ -12,6 +14,44 @@ MIN_SHARED_TERMS = 20     # absolute floor on shared terms before a pair is even
 MIN_SHARED_FRACTION = 0.10  # containment threshold against the smaller file's own term count
 TERM_DF_CAP = 2000        # terms present in more files than this are too common to be useful
 CONFIDENCE_DURATION_TOLERANCE = 5.0  # seconds; used only to annotate confidence, never to gate
+
+_worker_cache: FingerprintCache | None = None
+
+
+def _init_worker(cache_path: Path) -> None:
+    """Runs once per worker process — opens one connection reused across all
+    of that worker's tasks, instead of paying connection/schema-check
+    overhead on every single file.
+    """
+    global _worker_cache
+    _worker_cache = FingerprintCache(cache_path)
+
+
+def _match_file(self_path: str, self_fingerprint: list[int], fingerprint_threshold: float) -> list[tuple[str, str, float]]:
+    """Runs in a worker process: find and verify candidates for one file.
+
+    SQLite's WAL mode supports multiple concurrent readers, so each worker
+    querying the shared cache file in parallel is safe — this step never
+    writes. Returns confirmed matches as (self_path, candidate_path, similarity);
+    the caller does the actual fingerprint lookup for each candidate itself
+    (via cache.get_fingerprint) rather than the main process passing every
+    file's fingerprint to every worker up front, which would multiply the
+    whole library's memory footprint by the worker count.
+    """
+    cache = _worker_cache
+    self_terms = extract_terms(self_fingerprint)
+    candidates = cache.find_candidates(self_path, self_terms, MIN_SHARED_TERMS, TERM_DF_CAP)
+    matches: list[tuple[str, str, float]] = []
+    for cand_path, shared, cand_term_count in candidates:
+        if not is_candidate(shared, len(self_terms), cand_term_count, MIN_SHARED_TERMS, MIN_SHARED_FRACTION):
+            continue
+        cand_fingerprint = cache.get_fingerprint(cand_path)
+        if cand_fingerprint is None:
+            continue
+        sim = fingerprint_similarity(self_fingerprint, cand_fingerprint, fingerprint_threshold)
+        if sim >= fingerprint_threshold:
+            matches.append((self_path, cand_path, sim))
+    return matches
 
 
 def find_duplicates(
@@ -63,29 +103,35 @@ def find_duplicates(
     eligible = [f for f in files if f.fingerprint]
     total = len(eligible)
     matches_found = 0
+    workers = max_workers or (os.cpu_count() or 4)
 
     if verbose and total > 0:
-        print(f"  Matching {total} files against the fingerprint index...", flush=True)
+        print(f"  Matching {total} files against the fingerprint index ({workers} workers)...", flush=True)
 
-    for i, a in enumerate(eligible, 1):
-        a_terms = extract_terms(a.fingerprint)
-        candidates = cache.find_candidates(str(a.path), a_terms, MIN_SHARED_TERMS, TERM_DF_CAP)
-        for cand_path_str, shared, cand_term_count in candidates:
-            if not is_candidate(shared, len(a_terms), cand_term_count, MIN_SHARED_TERMS, MIN_SHARED_FRACTION):
-                continue
-            b = files_by_path_str.get(cand_path_str)
-            if b is None or not b.fingerprint:
-                continue
-            sim = fingerprint_similarity(a.fingerprint, b.fingerprint, fingerprint_threshold)
-            if sim >= fingerprint_threshold:
-                union(a.path, b.path)
-                key = frozenset((a.path, b.path))
-                edge_score[key] = sim
-                edge_tag_score[key] = identity_score(a, b) / 100.0
-                edge_duration_delta[key] = abs(a.duration - b.duration)
-                matches_found += 1
-        if verbose:
-            print(f"  [{i}/{total}] {matches_found} matches\r", end="", flush=True)
+    if eligible:
+        with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker, initargs=(cache.path,)) as pool:
+            future_to_file = {
+                pool.submit(_match_file, str(a.path), a.fingerprint, fingerprint_threshold): a
+                for a in eligible
+            }
+            try:
+                for i, future in enumerate(as_completed(future_to_file), 1):
+                    a = future_to_file[future]
+                    for _self_path_str, cand_path_str, sim in future.result():
+                        b = files_by_path_str.get(cand_path_str)
+                        if b is None or not b.fingerprint:
+                            continue
+                        union(a.path, b.path)
+                        key = frozenset((a.path, b.path))
+                        edge_score[key] = sim
+                        edge_tag_score[key] = identity_score(a, b) / 100.0
+                        edge_duration_delta[key] = abs(a.duration - b.duration)
+                        matches_found += 1
+                    if verbose:
+                        print(f"  [{i}/{total}] {matches_found} matches\r", end="", flush=True)
+            except KeyboardInterrupt:
+                pool.shutdown(cancel_futures=True)
+                raise
 
     if verbose and total > 0:
         print(f"  Done: {matches_found} matches" + " " * 20)
