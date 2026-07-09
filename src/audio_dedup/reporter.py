@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.rule import Rule
@@ -92,7 +94,7 @@ def print_report(
     _console.print()
 
 
-def print_json(groups: list[DuplicateGroup]) -> None:
+def print_json(groups: list[DuplicateGroup], output_path: Path | None = None) -> None:
     output = [
         {
             "tier": g.tier,
@@ -100,7 +102,18 @@ def print_json(groups: list[DuplicateGroup]) -> None:
             "score": round(g.score, 4),
             "tag_score": round(g.tag_score, 4),
             "files": [str(f.path) for f in g.files],
+            "keep": str(_best_file(g).path),
         }
         for g in groups
     ]
-    print(json.dumps(output, indent=2))
+    # ensure_ascii=False keeps non-ASCII tag/filename characters as actual UTF-8
+    # text instead of \uXXXX escapes.
+    text = json.dumps(output, indent=2, ensure_ascii=False)
+    if output_path is None:
+        # Writing raw encoded bytes (rather than print(), whose text-mode
+        # stdout encoding depends on the console's codepage) guarantees the
+        # output is UTF-8 regardless of platform/locale.
+        sys.stdout.buffer.write(text.encode("utf-8"))
+        sys.stdout.buffer.write(b"\n")
+    else:
+        output_path.write_text(text + "\n", encoding="utf-8")

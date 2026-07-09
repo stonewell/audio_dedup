@@ -13,11 +13,17 @@ pip install "audio_dedup[fingerprint]"   # adds the library-based fingerprinting
 ## Usage
 
 ```
-audio-dedup <directory> [--min-size KB] [--json] [--cache PATH] [--workers N] [--force-refresh]
+audio-dedup <directory> [--min-size KB] [--json[=PATH]] [--cache PATH] [--workers N] [--force-refresh]
 ```
 
 `python -m audio_dedup <directory> ...` also works, from an environment where the
 package is installed.
+
+`--json` writes machine-readable JSON to stdout and suppresses verbose
+progress output (so it doesn't mix with the JSON). `--json=PATH` (the `=` is
+required — `--json PATH` is ambiguous with the `directory` argument) writes
+to that file instead, and verbose progress still prints normally to stdout
+in that case.
 
 `--force-refresh` recomputes the fingerprint for every file, ignoring the
 cache — use it if you suspect a cached fingerprint is stale for a reason the

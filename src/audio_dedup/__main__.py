@@ -26,9 +26,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--json",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        metavar="PATH",
         dest="json_output",
-        help="Output machine-readable JSON",
+        help="Output machine-readable JSON. Use --json=PATH (the '=' is "
+        "required — a space-separated path is ambiguous with the directory "
+        "argument) to write to a file instead, in which case verbose "
+        "progress still prints normally. Plain --json (or PATH omitted) "
+        "writes to stdout and suppresses verbose progress so it doesn't mix "
+        "with the JSON.",
     )
     parser.add_argument(
         "--cache",
@@ -58,7 +66,8 @@ def main() -> int:
 
     cache_path = args.cache or directory.parent / ".audio_dedup_cache.sqlite3"
     cache = FingerprintCache(cache_path)
-    verbose = not args.json_output
+    json_to_stdout = args.json_output is True
+    verbose = not json_to_stdout
     workers = args.workers or os.cpu_count() or 4
 
     if verbose:
@@ -78,10 +87,11 @@ def main() -> int:
     )
     cache.close()
 
-    if args.json_output:
-        print_json(all_groups)
-    else:
+    if args.json_output is False:
         print_report(len(files), all_groups, warnings)
+    else:
+        output_path = None if json_to_stdout else Path(args.json_output)
+        print_json(all_groups, output_path)
 
     return 0
 
