@@ -24,7 +24,7 @@ NO_BACKEND_WARNING = (
 )
 
 
-def _try_chromaprint_library(path: Path) -> tuple[float, list[int]] | None:
+def _try_chromaprint_library(path: Path, verbose: bool = False) -> tuple[float, list[int]] | None:
     """Fingerprint via libchromaprint with explicit PCM chunk alignment.
 
     audioread may return chunks whose byte length is not divisible by
@@ -58,8 +58,10 @@ def _try_chromaprint_library(path: Path) -> tuple[float, list[int]] | None:
             fp_encoded = fper.finish()
 
         fp_ints, _ = _cp.decode_fingerprint(fp_encoded)
-        return duration, [int(x) for x in fp_ints]
-    except Exception:
+        return duration, [_to_signed32(int(x)) for x in fp_ints]
+    except Exception as e:
+        if verbose:
+            print(f"Skipped fingerprinting {path} — unsupported or corrupt audio data, {e}")
         return None
 
 
@@ -76,7 +78,7 @@ def _to_signed32(x: int) -> int:
     return x - 0x100000000 if x >= 0x80000000 else x
 
 
-def _try_fpcalc(path: Path) -> tuple[float, list[int]] | None:
+def _try_fpcalc(path: Path, verbose: bool = False) -> tuple[float, list[int]] | None:
     """Fingerprint by calling the fpcalc binary with -raw -json.
 
     Returns raw integer arrays directly — no chromaprint decode step needed.
@@ -97,13 +99,15 @@ def _try_fpcalc(path: Path) -> tuple[float, list[int]] | None:
         data = json.loads(result.stdout)
         fingerprint = [_to_signed32(x) for x in (data.get("fingerprint") or [])]
         return float(data.get("duration") or 0), fingerprint
-    except Exception:
+    except Exception as e:
+        if verbose:
+            print(f"Skipped fingerprinting {path} — unsupported or corrupt audio data, {e}")
         return None
 
 
-def _compute_fingerprint(path: Path) -> tuple[float, list[int]] | None:
+def _compute_fingerprint(path: Path, verbose:bool = False) -> tuple[float, list[int]] | None:
     """Try library path first, fall back to fpcalc binary. Runs in a worker process."""
-    return _try_chromaprint_library(path) or _try_fpcalc(path)
+    return _try_chromaprint_library(path, verbose) or _try_fpcalc(path, verbose)
 
 
 def _similarity_at_offset(a: list[int], b: list[int], offset: int) -> float:
@@ -180,6 +184,8 @@ def ensure_fingerprints(
             mtime = f.path.stat().st_mtime
         except OSError as e:
             warnings.append(f"Skipped fingerprinting {f.path} — file became inaccessible: {e}")
+            if verbose:
+                print(f"Skipped fingerprinting {f.path} — file became inaccessible: {e}")
             continue
         cached = cache.get(str(f.path), mtime)
         if cached is None:
@@ -203,7 +209,7 @@ def ensure_fingerprints(
                 flush=True,
             )
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            future_to_file = {pool.submit(_compute_fingerprint, f.path): f for f in to_compute}
+            future_to_file = {pool.submit(_compute_fingerprint, f.path, verbose): f for f in to_compute}
             try:
                 for i, future in enumerate(as_completed(future_to_file), 1):
                     f = future_to_file[future]
@@ -243,5 +249,7 @@ def ensure_fingerprints(
     else:
         for f in failed:
             warnings.append(f"Skipped fingerprinting {f.path} — unsupported or corrupt audio data")
+            if verbose:
+                print(f"Skipped fingerprinting {f.path} — unsupported or corrupt audio data")
 
     return warnings, new_count
