@@ -32,6 +32,39 @@ changing). Without it, only files whose cache entry is missing or whose
 mtime has changed are recomputed — a normal re-run of a large collection
 only touches what's new or edited.
 
+## Applying results: `audio-dedup-apply`
+
+`audio-dedup` only reports duplicates — it never touches your files. A
+separate companion script, `audio-dedup-apply` (`apply_dedup.py`), takes that
+JSON report and acts on it: for every duplicate file in a group, it renames
+the duplicate to `<name>.bak` (nothing is deleted — the original bytes stay
+on disk under the backup name) and then creates a hard link at the original
+path pointing at the group's `keep` file. The two paths end up sharing the
+same on-disk data — a `du`/Explorer size count no longer double-counts them
+— while every original path still exists and still works.
+
+```
+audio-dedup /music --json=out.json
+audio-dedup-apply out.json              # dry run — prints what it would do
+audio-dedup-apply --apply out.json      # actually rename + hard-link
+
+# or piped directly — put the directory first and --json last (with
+# nothing after it) so it isn't mistaken for --json's PATH value; --json
+# with no path suppresses progress output so only JSON reaches stdout:
+audio-dedup /music --json | audio-dedup-apply --apply
+```
+
+Safety notes:
+- Re-running is idempotent — a duplicate already hard-linked to its `keep`
+  file is detected (`Path.samefile`) and skipped, not backed up again.
+- If a backup name is already taken (e.g. a prior run), a numeric suffix
+  (`.bak.1`, `.bak.2`, ...) is used instead of overwriting it.
+- Hard links only work within the same filesystem/volume. If linking fails
+  (e.g. `keep` and the duplicate are on different drives), the rename is
+  rolled back — the duplicate file is left exactly as it was, not missing.
+- A group whose `keep` file is missing is skipped entirely (nothing in that
+  group is touched) rather than guessing a new one.
+
 ## Design
 
 Duplicate detection is **fingerprint-first**: every file is acoustic-fingerprinted

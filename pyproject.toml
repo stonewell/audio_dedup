@@ -19,6 +19,7 @@ fingerprint = ["pyacoustid","audioread","pymad"]
 
 [project.scripts]
 audio-dedup = "audio_dedup.__main__:main"
+audio-dedup-apply = "audio_dedup.apply_dedup:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
